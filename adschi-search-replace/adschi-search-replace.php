@@ -3,8 +3,8 @@
  * Plugin Name:       Adschi Search and Replace
  * Description:       A plugin to search and replace text throughout the entire WordPress database.
  * Version:           1.1.0
- * Author:            Mohammad Babaei Adschi.com
- * Author URI:        https://adschi.com/
+ * Author:            Mohammad Babaei
+ * Author URI:        https://adschi.com
  * License:           GPL v2 or later
  * License URI:       https://www.gnu.org/licenses/gpl-2.0.html
  * Text Domain:       adschi-search-replace
@@ -231,7 +231,12 @@ function asr_options_page_html() {
 				);
 				?>
 			</p>
-			<p><em><?php esc_html_e( 'Plugin developed by Mohammad Babaei', 'adschi-search-replace' ); ?></em></p>
+			<p>
+				<em>
+					<?php esc_html_e( 'Developed by', 'adschi-search-replace' ); ?>
+					<a href="https://adschi.com" target="_blank" rel="noopener noreferrer">Mohammad Babaei</a>
+				</em>
+			</p>
 		</div>
 
 	</div>
