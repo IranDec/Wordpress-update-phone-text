@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Adschi Search and Replace
  * Description:       A plugin to search and replace text throughout the entire WordPress database.
- * Version:           1.2.0
+ * Version:           1.3.0
  * Author:            Mohammad Babaei
  * Author URI:        https://adschi.com
  * License:           GPL v2 or later
@@ -16,6 +16,30 @@
 if ( ! defined( 'WPINC' ) ) {
 	die;
 }
+
+/**
+ * Create the history table upon plugin activation.
+ */
+function asr_create_history_table() {
+	global $wpdb;
+	$table_name      = $wpdb->prefix . 'asr_history';
+	$charset_collate = $wpdb->get_charset_collate();
+
+	$sql = "CREATE TABLE $table_name (
+		id bigint(20) NOT NULL AUTO_INCREMENT,
+		search_term text NOT NULL,
+		replace_term text NOT NULL,
+		rows_affected int(11) NOT NULL,
+		tables_processed int(11) NOT NULL,
+		timestamp datetime DEFAULT '0000-00-00 00:00:00' NOT NULL,
+		user_id bigint(20) UNSIGNED NOT NULL,
+		PRIMARY KEY  (id)
+	) $charset_collate;";
+
+	require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+	dbDelta( $sql );
+}
+register_activation_hook( __FILE__, 'asr_create_history_table' );
 
 /**
  * Check if a string is serialized.
@@ -148,6 +172,7 @@ function asr_handle_search_replace() {
 	$search         = sanitize_text_field( wp_unslash( $_POST['asr_search'] ) );
 	$replace        = isset( $_POST['asr_replace'] ) ? sanitize_text_field( wp_unslash( $_POST['asr_replace'] ) ) : '';
 	$case_sensitive = isset( $_POST['asr_case_sensitive'] ) && '1' === $_POST['asr_case_sensitive'];
+	$whole_word     = isset( $_POST['asr_whole_word'] ) && '1' === $_POST['asr_whole_word'];
 
 	// Get all tables.
 	$tables = $wpdb->get_results( 'SHOW TABLES' );
@@ -223,7 +248,16 @@ function asr_handle_search_replace() {
 			// Check each text column in the row for a match.
 			foreach ( $text_columns as $column_name ) {
 				$original_value = $row->$column_name;
-				$new_value      = asr_recursive_replace( $original_value, $search, $replace, $case_sensitive );
+				$new_value      = $original_value;
+
+				if ( $whole_word ) {
+					$comparison_function = $case_sensitive ? 'strcmp' : 'strcasecmp';
+					if ( 0 === $comparison_function( $original_value, $search ) ) {
+						$new_value = $replace;
+					}
+				} else {
+					$new_value = asr_recursive_replace( $original_value, $search, $replace, $case_sensitive );
+				}
 
 				if ( $new_value !== $original_value ) {
 					$update_data[ $column_name ] = $new_value;
@@ -248,6 +282,22 @@ function asr_handle_search_replace() {
 		absint( $tables_processed )
 	);
 	add_settings_error( 'asr_messages', 'asr_success', $message, 'success' );
+
+	// Log the action to the history table.
+	if ( $total_rows_affected > 0 ) {
+		$history_table = $wpdb->prefix . 'asr_history';
+		$wpdb->insert(
+			$history_table,
+			array(
+				'search_term'      => $search,
+				'replace_term'     => $replace,
+				'rows_affected'    => $total_rows_affected,
+				'tables_processed' => $tables_processed,
+				'timestamp'        => current_time( 'mysql' ),
+				'user_id'          => get_current_user_id(),
+			)
+		);
+	}
 }
 
 add_action( 'admin_init', 'asr_handle_search_replace' );
@@ -256,15 +306,143 @@ add_action( 'admin_init', 'asr_handle_search_replace' );
  * Add a new top-level menu item to the WordPress admin.
  */
 function asr_options_page() {
-	add_management_page(
+	add_menu_page(
 		__( 'Adschi Search and Replace', 'adschi-search-replace' ),
-		__( 'Adschi Search & Replace', 'adschi-search-replace' ),
+		__( 'Adschi S&R', 'adschi-search-replace' ),
+		'manage_options',
+		'adschi-search-replace',
+		'asr_options_page_html',
+		'dashicons-search'
+	);
+
+	add_submenu_page(
+		'adschi-search-replace',
+		__( 'Search & Replace', 'adschi-search-replace' ),
+		__( 'Search & Replace', 'adschi-search-replace' ),
 		'manage_options',
 		'adschi-search-replace',
 		'asr_options_page_html'
 	);
+
+	add_submenu_page(
+		'adschi-search-replace',
+		__( 'History', 'adschi-search-replace' ),
+		__( 'History', 'adschi-search-replace' ),
+		'manage_options',
+		'adschi-search-replace-history',
+		'asr_history_page_html'
+	);
 }
 add_action( 'admin_menu', 'asr_options_page' );
+
+if ( ! class_exists( 'WP_List_Table' ) ) {
+	require_once ABSPATH . 'wp-admin/includes/class-wp-list-table.php';
+}
+
+/**
+ * Class for displaying the history log in a list table.
+ */
+class ASR_History_List_Table extends WP_List_Table {
+
+	/**
+	 * Constructor.
+	 */
+	public function __construct() {
+		parent::__construct(
+			array(
+				'singular' => __( 'Log', 'adschi-search-replace' ),
+				'plural'   => __( 'Logs', 'adschi-search-replace' ),
+				'ajax'     => false,
+			)
+		);
+	}
+
+	/**
+	 * Get the list of columns.
+	 *
+	 * @return array
+	 */
+	public function get_columns() {
+		return array(
+			'search_term'      => __( 'Find', 'adschi-search-replace' ),
+			'replace_term'     => __( 'Replace with', 'adschi-search-replace' ),
+			'rows_affected'    => __( 'Rows Affected', 'adschi-search-replace' ),
+			'tables_processed' => __( 'Tables Processed', 'adschi-search-replace' ),
+			'timestamp'        => __( 'Date', 'adschi-search-replace' ),
+			'user_id'          => __( 'User', 'adschi-search-replace' ),
+		);
+	}
+
+	/**
+	 * Prepare the items for the table.
+	 */
+	public function prepare_items() {
+		global $wpdb;
+		$table_name = $wpdb->prefix . 'asr_history';
+
+		$per_page     = 20;
+		$current_page = $this->get_pagenum();
+		$total_items  = $wpdb->get_var( "SELECT COUNT(id) FROM $table_name" );
+
+		$this->set_pagination_args(
+			array(
+				'total_items' => $total_items,
+				'per_page'    => $per_page,
+			)
+		);
+
+		$offset = ( $current_page - 1 ) * $per_page;
+
+		$this->_column_headers = array( $this->get_columns(), array(), $this->get_sortable_columns() );
+		$this->items           = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT * FROM $table_name ORDER BY timestamp DESC LIMIT %d OFFSET %d",
+				$per_page,
+				$offset
+			),
+			ARRAY_A
+		);
+	}
+
+	/**
+	 * Define what data to show on each column of the table.
+	 *
+	 * @param  array  $item        Data.
+	 * @param  string $column_name - Current column name.
+	 * @return mixed
+	 */
+	public function column_default( $item, $column_name ) {
+		switch ( $column_name ) {
+			case 'search_term':
+			case 'replace_term':
+			case 'rows_affected':
+			case 'tables_processed':
+			case 'timestamp':
+				return $item[ $column_name ];
+			case 'user_id':
+				$user = get_userdata( $item[ $column_name ] );
+				return $user ? $user->display_name : __( 'Unknown', 'adschi-search-replace' );
+			default:
+				return print_r( $item, true );
+		}
+	}
+}
+
+/**
+ * Display the history page HTML.
+ */
+function asr_history_page_html() {
+	?>
+	<div class="wrap">
+		<h1><?php esc_html_e( 'Search and Replace History', 'adschi-search-replace' ); ?></h1>
+		<?php
+		$list_table = new ASR_History_List_Table();
+		$list_table->prepare_items();
+		$list_table->display();
+		?>
+	</div>
+	<?php
+}
 
 /**
  * Display the plugin's options page HTML.
@@ -305,8 +483,13 @@ function asr_options_page_html() {
 								<input type="checkbox" name="asr_case_sensitive" id="asr_case_sensitive" value="1" />
 								<?php esc_html_e( 'Case-sensitive', 'adschi-search-replace' ); ?>
 							</label>
+							<br />
+							<label for="asr_whole_word">
+								<input type="checkbox" name="asr_whole_word" id="asr_whole_word" value="1" />
+								<?php esc_html_e( 'Match whole value only', 'adschi-search-replace' ); ?>
+							</label>
 							<p class="description">
-								<?php esc_html_e( 'By default, the search is case-insensitive.', 'adschi-search-replace' ); ?>
+								<?php esc_html_e( 'By default, the search is case-insensitive and replaces all occurrences.', 'adschi-search-replace' ); ?>
 							</p>
 						</fieldset>
 					</td>
