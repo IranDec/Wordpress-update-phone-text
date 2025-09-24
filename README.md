@@ -1,5 +1,8 @@
 # Adschi Search and Replace
 
+**Author:** [Mohammad Babaei](https://adschi.com)
+**Version:** 1.3.0
+
 A simple and powerful WordPress plugin to search and replace text throughout your entire database. This plugin is designed to be a helpful tool for developers and site administrators who need to perform bulk updates, such as changing a phone number, updating a domain name, or correcting a recurring typo.
 
 ## Features
