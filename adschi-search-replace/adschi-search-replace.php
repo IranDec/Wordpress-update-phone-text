@@ -161,6 +161,20 @@ function asr_handle_search_replace() {
 add_action( 'admin_init', 'asr_handle_search_replace' );
 
 /**
+ * Add a new top-level menu item to the WordPress admin.
+ */
+function asr_options_page() {
+	add_management_page(
+		__( 'Adschi Search and Replace', 'adschi-search-replace' ),
+		__( 'Adschi Search & Replace', 'adschi-search-replace' ),
+		'manage_options',
+		'adschi-search-replace',
+		'asr_options_page_html'
+	);
+}
+add_action( 'admin_menu', 'asr_options_page' );
+
+/**
  * Display the plugin's options page HTML.
  */
 function asr_options_page_html() {
