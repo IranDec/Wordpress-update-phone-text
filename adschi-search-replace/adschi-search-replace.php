@@ -2,7 +2,7 @@
 /**
  * Plugin Name:       Adschi Search and Replace
  * Description:       A plugin to search and replace text throughout the entire WordPress database.
- * Version:           1.1.0
+ * Version:           1.2.0
  * Author:            Mohammad Babaei
  * Author URI:        https://adschi.com
  * License:           GPL v2 or later
@@ -15,6 +15,110 @@
 // If this file is called directly, abort.
 if ( ! defined( 'WPINC' ) ) {
 	die;
+}
+
+/**
+ * Check if a string is serialized.
+ *
+ * @param string $data The string to check.
+ * @param bool   $strict Whether to be strict about the check.
+ * @return bool
+ */
+function asr_is_serialized( $data, $strict = true ) {
+	// If it isn't a string, it isn't serialized.
+	if ( ! is_string( $data ) ) {
+		return false;
+	}
+	$data = trim( $data );
+	if ( 'N;' === $data ) {
+		return true;
+	}
+	if ( strlen( $data ) < 4 ) {
+		return false;
+	}
+	if ( ':' !== $data[1] ) {
+		return false;
+	}
+	if ( $strict ) {
+		$lastc = substr( $data, -1 );
+		if ( ';' !== $lastc && '}' !== $lastc ) {
+			return false;
+		}
+	} else {
+		$semicolon = strpos( $data, ';' );
+		$brace     = strpos( $data, '}' );
+		// Either ; or } must exist.
+		if ( false === $semicolon && false === $brace ) {
+			return false;
+		}
+		// But neither must be in the first X characters.
+		if ( false !== $semicolon && $semicolon < 3 ) {
+			return false;
+		}
+		if ( false !== $brace && $brace < 4 ) {
+			return false;
+		}
+	}
+	$token = $data[0];
+	switch ( $token ) {
+		case 's':
+			if ( $strict ) {
+				if ( '"' !== substr( $data, -2, 1 ) ) {
+					return false;
+				}
+			} elseif ( false === strpos( $data, '"' ) ) {
+				return false;
+			}
+			// Or else fall through.
+		case 'a':
+		case 'O':
+			return (bool) preg_match( "/^{$token}:[0-9]+:.*[;}]\$/s", $data );
+		case 'b':
+		case 'i':
+		case 'd':
+			$end = $strict ? '$' : '';
+			return (bool) preg_match( "/^{$token}:[0-9.E-]+;$end/", $data );
+	}
+	return false;
+}
+
+/**
+ * Recursively search and replace data.
+ *
+ * @param mixed  $data    The data to search and replace.
+ * @param string $search  The value to search for.
+ * @param string $replace The value to replace it with.
+ * @return mixed
+ */
+function asr_recursive_replace( $data, $search, $replace, $case_sensitive = false ) {
+	if ( is_string( $data ) ) {
+		if ( asr_is_serialized( $data ) ) {
+			$unserialized = @unserialize( $data );
+			if ( false !== $unserialized ) {
+				$unserialized = asr_recursive_replace( $unserialized, $search, $replace, $case_sensitive );
+				return serialize( $unserialized );
+			}
+		}
+		$replace_function = $case_sensitive ? 'str_replace' : 'str_ireplace';
+		return $replace_function( $search, $replace, $data );
+	}
+
+	if ( is_array( $data ) ) {
+		foreach ( $data as $key => &$value ) {
+			$value = asr_recursive_replace( $value, $search, $replace, $case_sensitive );
+		}
+		return $data;
+	}
+
+	if ( is_object( $data ) ) {
+		$new_object = new stdClass();
+		foreach ( $data as $key => $value ) {
+			$new_object->$key = asr_recursive_replace( $value, $search, $replace, $case_sensitive );
+		}
+		return $new_object;
+	}
+
+	return $data;
 }
 
 /**
@@ -44,17 +148,6 @@ function asr_handle_search_replace() {
 	$search         = sanitize_text_field( wp_unslash( $_POST['asr_search'] ) );
 	$replace        = isset( $_POST['asr_replace'] ) ? sanitize_text_field( wp_unslash( $_POST['asr_replace'] ) ) : '';
 	$case_sensitive = isset( $_POST['asr_case_sensitive'] ) && '1' === $_POST['asr_case_sensitive'];
-	$whole_word     = isset( $_POST['asr_whole_word'] ) && '1' === $_POST['asr_whole_word'];
-
-	// Build the regex pattern.
-	$regex_search = preg_quote( $search, '/' );
-	if ( $whole_word ) {
-		$regex_search = '\b' . $regex_search . '\b';
-	}
-	$pattern = '/' . $regex_search . '/';
-	if ( ! $case_sensitive ) {
-		$pattern .= 'i';
-	}
 
 	// Get all tables.
 	$tables = $wpdb->get_results( 'SHOW TABLES' );
@@ -130,10 +223,9 @@ function asr_handle_search_replace() {
 			// Check each text column in the row for a match.
 			foreach ( $text_columns as $column_name ) {
 				$original_value = $row->$column_name;
-				$count = 0;
-				$new_value = preg_replace( $pattern, $replace, $original_value, -1, $count );
+				$new_value      = asr_recursive_replace( $original_value, $search, $replace, $case_sensitive );
 
-				if ( $count > 0 && $new_value !== $original_value ) {
+				if ( $new_value !== $original_value ) {
 					$update_data[ $column_name ] = $new_value;
 					$row_changed = true;
 				}
@@ -213,14 +305,8 @@ function asr_options_page_html() {
 								<input type="checkbox" name="asr_case_sensitive" id="asr_case_sensitive" value="1" />
 								<?php esc_html_e( 'Case-sensitive', 'adschi-search-replace' ); ?>
 							</label>
-							<br />
-							<label for="asr_whole_word">
-								<input type="checkbox" name="asr_whole_word" id="asr_whole_word" value="1" />
-								<?php esc_html_e( 'Match whole value only', 'adschi-search-replace' ); ?>
-							</label>
 							<p class="description">
-								<?php esc_html_e( 'By default, the search is a case-insensitive search for any occurrence of the text.', 'adschi-search-replace' ); ?><br />
-								<strong><?php esc_html_e( 'Note:', 'adschi-search-replace' ); ?></strong> <?php esc_html_e( 'For safety, the `users` and `usermeta` tables are not affected by this tool. The replacement behavior itself (case-sensitive or not) depends on your database\'s configuration (collation).', 'adschi-search-replace' ); ?>
+								<?php esc_html_e( 'By default, the search is case-insensitive.', 'adschi-search-replace' ); ?>
 							</p>
 						</fieldset>
 					</td>
